@@ -8,6 +8,7 @@ from torch_geometric.data import Data
 import numpy as np
 from tqdm.auto import tqdm
 import wandb
+from .base import BaseModel
 
 
 class GAEEncoder(nn.Module):
@@ -31,7 +32,7 @@ class GAEEncoder(nn.Module):
         return self.convs[-1](x, edge_index)
 
 
-class GAEBenchmark:
+class GNNModel(BaseModel):
     def __init__(
         self,
         input_dim,
@@ -42,6 +43,7 @@ class GAEBenchmark:
         epochs=100,
         k=5,
     ):
+        super().__init__()
         # build a PyG GAE
         self.encoder = GAEEncoder(input_dim, hidden_dim, num_layers)
         self.model = GAE(self.encoder)
@@ -51,6 +53,8 @@ class GAEBenchmark:
         self.lr = lr
         self.epochs = epochs
         self.k = k
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr)
+        self.scheduler = torch.optim.lr_scheduler.ConstantLR(self.optimizer, factor=1.0)
 
     def _create_graph(self, data):
         """Convert data points to a graph structure using k-nearest neighbors.
@@ -73,14 +77,39 @@ class GAEBenchmark:
 
         return Data(x=x, edge_index=edge_index)
 
-    def fit(self, X):
+    def train_epoch(self, dataset):
+        """Train the model for one epoch.
+
+        Args:
+            dataset: Dataset containing the training data
+
+        Returns:
+            float: Training loss for this epoch
+        """
+        self.model.train()
+        self.optimizer.zero_grad()
+
+        # Create graph for the dataset
+        data = self._create_graph(dataset.data)
+
+        # Forward pass
+        z = self.model.encode(data.x, data.edge_index)
+        loss = self.model.recon_loss(z, data.edge_index)
+
+        # Backward pass
+        loss.backward()
+        self.optimizer.step()
+        self.scheduler.step()
+
+        return loss.item()
+
+    def fit(self, X, y=None):
         """Train the GNN model.
         Args:
             X: Input data tensor (dataset.data)
+            y: Optional labels (not used in GNN training)
         """
         self.model.train()
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr)
-        scheduler = torch.optim.lr_scheduler.ConstantLR(optimizer, factor=1.0)
 
         # Create graph for the whole dataset
         data = self._create_graph(X)
@@ -88,14 +117,14 @@ class GAEBenchmark:
         # Training loop
         print(f"Training GNN for {self.epochs} epochs")
         for epoch in tqdm(range(self.epochs), desc="Training GNN"):
-            optimizer.zero_grad()
+            self.optimizer.zero_grad()
             # encode → z: [n_samples, hidden_dim]
             z = self.model.encode(data.x, data.edge_index)
             # loss = edge-reconstruction loss
             loss = self.model.recon_loss(z, data.edge_index)
             loss.backward()
-            optimizer.step()
-            scheduler.step()
+            self.optimizer.step()
+            self.scheduler.step()
 
             # Log to wandb if enabled
             if wandb.run is not None:
@@ -103,11 +132,11 @@ class GAEBenchmark:
                     {
                         "gnn/epoch": epoch,
                         "gnn/recon_loss": loss.item(),
-                        "gnn/learning_rate": scheduler.get_last_lr()[0],
+                        "gnn/learning_rate": self.scheduler.get_last_lr()[0],
                     }
                 )
 
-        return loss.item(), self
+        return self
 
     def decision_function(self, X):
         """
@@ -130,79 +159,11 @@ class GAEBenchmark:
 
     def predict(self, X):
         """
-        Label as anomaly (–1) any node whose
+        Label as anomaly (1) any node whose
         recon-error is above the given percentile.
         """
         scores = self.decision_function(X)
         thresh = np.percentile(scores, 100 - 100 * self.outliers_fraction)
-        return np.where(scores > thresh, 1, 0)
+        predictions = np.where(scores > thresh, 1, 0)
 
-
-class GraphAutoencoder(nn.Module):
-    def __init__(self, input_dim, hidden_dim, num_layers):
-        super(GraphAutoencoder, self).__init__()
-        self.input_dim = input_dim
-        self.hidden_dim = hidden_dim
-        self.num_layers = num_layers
-
-        # Encoder layers
-        self.encoder_layers = nn.ModuleList()
-        self.encoder_layers.append(GCNConv(input_dim, hidden_dim))
-        for _ in range(num_layers - 1):
-            self.encoder_layers.append(GCNConv(hidden_dim, hidden_dim))
-
-        # Decoder layers
-        self.decoder_layers = nn.ModuleList()
-        for _ in range(num_layers - 1):
-            self.decoder_layers.append(GCNConv(hidden_dim, hidden_dim))
-        self.decoder_layers.append(GCNConv(hidden_dim, input_dim))
-
-    def forward(self, x, edge_index):
-        # Encoder
-        h = x
-        for layer in self.encoder_layers:
-            h = F.relu(layer(h, edge_index))
-
-        # Decoder
-        for layer in self.decoder_layers:
-            h = F.relu(layer(h, edge_index))
-
-        return h
-
-    def fit(self, dataset, epochs, lr, batch_size, device, verbose=True):
-        """Train the GNN model."""
-        self.train()
-        optimizer = torch.optim.Adam(self.parameters(), lr=lr)
-
-        # Convert data to PyTorch tensors
-        X = torch.FloatTensor(dataset.data).to(device)
-        edge_index, _ = dense_to_sparse(torch.ones((X.shape[0], X.shape[0])))
-        edge_index = edge_index.to(device)
-
-        # Training loop with progress bar
-        pbar = tqdm(range(epochs), desc="Training GNN", disable=not verbose)
-        for epoch in pbar:
-            optimizer.zero_grad()
-            output = self(X, edge_index)
-            loss = F.mse_loss(output, X)
-            loss.backward()
-            optimizer.step()
-
-            # Update progress bar
-            pbar.set_description(f"Epoch {epoch+1}/{epochs}")
-            pbar.set_postfix({"loss": f"{loss.item():.4f}"})
-
-            # Log to wandb if available
-            if hasattr(self, "wandb") and self.wandb is not None:
-                self.wandb.log({"epoch": epoch, "reconstruction_loss": loss.item()})
-
-    def predict(self, dataset, device):
-        """Predict anomalies using reconstruction error."""
-        self.eval()
-        with torch.no_grad():
-            X = torch.FloatTensor(dataset.data).to(device)
-            edge_index, _ = dense_to_sparse(torch.ones((X.shape[0], X.shape[0])))
-            edge_index = edge_index.to(device)
-            output = self(X, edge_index)
-            reconstruction_error = F.mse_loss(output, X, reduction="none").mean(dim=1)
-            return reconstruction_error.cpu().numpy()
+        return predictions
