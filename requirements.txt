@@ -3,6 +3,3 @@ numpy==1.24.3
 xgboost>=2.0.0
 flask==2.3.2
 gunicorn==21.2.0
-
-
-ç
