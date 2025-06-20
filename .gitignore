@@ -8,3 +8,5 @@ results/*
 venv/
 note.md
 wandb/
+.idea/
+*.iml
