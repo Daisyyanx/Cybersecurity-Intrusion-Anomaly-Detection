@@ -14,5 +14,7 @@ torch-geometric>=2.5.0
 networkx>=3.2.1
 wandb>=0.16.0
 xgboost>=2.0.0
+flask==2.3.2
+gunicorn==21.2.0
 
 
