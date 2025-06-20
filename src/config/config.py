@@ -5,7 +5,9 @@ import numpy as np
 
 def configure():
     """Configure command line arguments."""
-    parser = argparse.ArgumentParser(description="Anomaly Detection with IFOR and GNN")
+    parser = argparse.ArgumentParser(
+        description="Anomaly Detection with IFOR, GNN, and XGBoost"
+    )
 
     # General flags
     parser.add_argument("--dataset", type=str, default="beth", help="Dataset to use")
@@ -23,7 +25,9 @@ def configure():
     )
 
     # Model flags
-    parser.add_argument("--model", type=str, default="ifor", help="Model to use")
+    parser.add_argument(
+        "--model", type=str, default="ifor", help="Model to use (ifor, gnn, xgb)"
+    )
     parser.add_argument(
         "--outliers-fraction", type=float, default=0.1, help="Outliers fraction"
     )

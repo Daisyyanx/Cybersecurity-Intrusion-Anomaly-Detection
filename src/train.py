@@ -33,7 +33,7 @@ def train(args):
         model = MODELS[args.model](
             contamination=args.outliers_fraction, random_state=args.seed
         )
-    else:  # GNN model
+    elif args.model == "gnn":
         model = MODELS[args.model](
             input_dim=train_dataset.get_input_shape(),  # Already returns number of features
             hidden_dim=args.hidden_size,
@@ -82,7 +82,7 @@ def train(args):
                     "val/f1": val_f1,
                 }
             )
-    else:
+    elif args.model == "gnn":
         # GNN is trained epoch by epoch
         for epoch in tqdm(range(args.epochs)):
             # Train
@@ -137,6 +137,8 @@ def test(args):
 
     # Load best model
     model_path = get_model_path(args.model, args.dataset)
+
+    # Load other models using standard pickle
     try:
         with open(model_path, "rb") as f:
             model = pickle.load(f)
